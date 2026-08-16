@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "import:osm": "node scripts/import-osm.mjs"
+    "import:osm": "node scripts/import-osm.mjs",
+    "import:file": "node scripts/import-file.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

@@ -19,6 +19,8 @@ export interface Machine {
   status_confidence: number;
   status_reports: number;
   status_at: string | null;
+  open_now?: boolean | null;
+  availability?: string | null;
 }
 
 export interface Report {

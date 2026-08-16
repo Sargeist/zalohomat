@@ -16,10 +16,21 @@ try {
   });
 } catch { /* .env.local nemusí existovať v CI */ }
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// odrezeme koncove lomitko — inak vznikne '//rest/v1/...' a gateway vrati chybu
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error('Chýba NEXT_PUBLIC_SUPABASE_URL alebo SUPABASE_SERVICE_ROLE_KEY');
+  process.exit(1);
+}
+
+// Kontrola formatu URL — casta chyba je vlozit adresu dashboardu namiesto API.
+if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(SUPABASE_URL)) {
+  console.error('\nNEXT_PUBLIC_SUPABASE_URL vyzera nespravne:');
+  console.error('  ' + SUPABASE_URL);
+  console.error('\nOcakavany tvar:  https://xxxxxxxxxxxx.supabase.co');
+  console.error('Najdes ho v Supabase -> Project Settings -> Data API -> Project URL');
+  console.error('(NIE adresa z prehliadaca so /dashboard/project/... )\n');
   process.exit(1);
 }
 
@@ -109,7 +120,13 @@ async function main() {
   for (let i = 0; i < rows.length; i += 100) {
     const chunk = rows.slice(i, i + 100);
     const { error } = await sb.rpc('upsert_machines', { payload: chunk });
-    if (error) { console.error(error.message); process.exit(1); }
+    if (error) {
+      console.error('\nSupabase odmietol zapis:', error.message);
+      if (error.message.includes('upsert_machines')) {
+        console.error('Funkcia upsert_machines neexistuje — spusti migraciu 0001_init.sql v SQL Editore.');
+      }
+      process.exit(1);
+    }
     console.log(`  ${Math.min(i + 100, rows.length)} / ${rows.length}`);
   }
   console.log('Hotovo.');
