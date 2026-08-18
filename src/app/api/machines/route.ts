@@ -6,12 +6,13 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const Query = z.object({
-  south: z.coerce.number().min(47).max(50),
-  west: z.coerce.number().min(16).max(23),
-  north: z.coerce.number().min(47).max(50),
-  east: z.coerce.number().min(16).max(23),
-  lat: z.coerce.number().min(47).max(50).optional(),
-  lng: z.coerce.number().min(16).max(23).optional(),
+  south: z.coerce.number().min(45).max(52),
+  west: z.coerce.number().min(14).max(25),
+  north: z.coerce.number().min(45).max(52),
+  east: z.coerce.number().min(14).max(25),
+  lat: z.coerce.number().min(45).max(52),
+  lng: z.coerce.number().min(14).max(25),
+  zoom: z.coerce.number().int().min(3).max(20).default(13),
 }).refine((v) => v.north > v.south && v.east > v.west, { message: 'bad_bbox' });
 
 export async function GET(req: Request) {
@@ -20,17 +21,16 @@ export async function GET(req: Request) {
   const b = parsed.data;
 
   const sb = await supabaseServer();
-  const { data, error } = await sb.rpc('machines_bbox', {
+  const { data, error } = await sb.rpc('machines_view', {
     p_south: b.south, p_west: b.west, p_north: b.north, p_east: b.east,
-    p_lat: b.lat ?? null, p_lng: b.lng ?? null, p_limit: 1200,
+    p_lat: b.lat, p_lng: b.lng, p_zoom: b.zoom, p_points: 60,
   });
 
   if (error) {
-    console.error('machines_bbox', error.message);
+    console.error('machines_view', error.message);
     return NextResponse.json({ error: 'server_error' }, { status: 500 });
   }
-  return NextResponse.json(
-    { machines: data ?? [], truncated: (data?.length ?? 0) >= 1200 },
-    { headers: { 'Cache-Control': 'private, max-age=15' } }
-  );
+  return NextResponse.json(data, {
+    headers: { 'Cache-Control': 'private, max-age=20' },
+  });
 }

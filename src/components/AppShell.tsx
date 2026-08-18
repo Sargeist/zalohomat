@@ -18,6 +18,7 @@ const photoUrl = (m: Machine) => (m.photo_ref ? `/api/photo?ref=${encodeURICompo
 
 const MapView = dynamic(() => import('./MapView'), { ssr: false });
 type Bounds = { south: number; west: number; north: number; east: number };
+type Cluster = { lat: number; lng: number; n: number; n_machine: number };
 
 const BRATISLAVA: [number, number] = [48.1486, 17.1077];
 const REPORT_RADIUS_M = 150;
@@ -44,7 +45,7 @@ export default function AppShell() {
   const [pos, setPos] = useState<[number, number]>(BRATISLAVA);
 
   const [mapPoints, setMapPoints] = useState<Machine[]>([]);
-  const [truncated, setTruncated] = useState(false);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>('home');
   const [filter, setFilter] = useState<Filter>('all');
@@ -68,36 +69,44 @@ export default function AppShell() {
     );
   }, []);
 
-  const load = useCallback(async (b?: Bounds) => {
+  const inflight = useRef<AbortController | null>(null);
+
+  const load = useCallback(async (b?: Bounds, zoom = 13) => {
     const box = b ?? {
       south: pos[0] - 0.09, north: pos[0] + 0.09,
       west: pos[1] - 0.14, east: pos[1] + 0.14,
     };
+
+    inflight.current?.abort();
+    const ac = new AbortController();
+    inflight.current = ac;
+
     setLoading(true);
     try {
       const q = new URLSearchParams({
         south: String(box.south), west: String(box.west),
         north: String(box.north), east: String(box.east),
-        lat: String(pos[0]), lng: String(pos[1]),
+        lat: String(pos[0]), lng: String(pos[1]), zoom: String(zoom),
       });
-      const r = await fetch(`/api/machines/bbox?${q}`);
+      const r = await fetch(`/api/machines/bbox?${q}`, { signal: ac.signal });
       const json = await r.json();
       if (json.error) {
         console.error('/api/machines/bbox:', json.error);
-      } else {
-        setMapPoints(withDistance(json.machines ?? [], pos));
-        setTruncated(Boolean(json.truncated));
+        return;
       }
+      const points = withDistance([...(json.points ?? []), ...(json.extra ?? [])], pos);
+      setMapPoints(points);
+      setClusters(json.clusters ?? []);
     } catch (e) {
-      console.error('/api/machines/bbox:', e);
+      if ((e as Error).name !== 'AbortError') console.error('/api/machines/bbox:', e);
     } finally {
-      setLoading(false);
+      if (inflight.current === ac) setLoading(false);
     }
   }, [pos]);
 
   useEffect(() => { load(); }, [load]);
 
-  const loadBounds = useCallback((b: Bounds) => { load(b); }, [load]);
+  const loadBounds = useCallback((b: Bounds, zoom: number) => { load(b, zoom); }, [load]);
 
   useEffect(() => {
     const id = setInterval(load, 60000);
@@ -281,17 +290,19 @@ export default function AppShell() {
           <div className="mapcard">
             <MapView
               machines={pool.filter(passesFilter)}
+              clusters={clusters}
               center={pos}
               onSelect={open}
               onBoundsChange={loadBounds}
             />
             <div className="maplbl"><i />
-              {t('works', {
-                a: pool.filter((m) => liveness(m).status === 'ok').length,
-                b: pool.length,
-              })}
+              {clusters.length > 0
+                ? t('clustered', { n: clusters.reduce((a, c) => a + c.n, 0) })
+                : t('works', {
+                    a: pool.filter((m) => liveness(m).status === 'ok').length,
+                    b: pool.length,
+                  })}
             </div>
-            {truncated && <div className="maphint">{t('mapTruncated')}</div>}
           </div>
 
           <div className="pills">
