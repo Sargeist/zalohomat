@@ -1,22 +1,13 @@
-/**
- * Import odberných miest z OpenStreetMap cez Overpass API.
- * Spustenie:  node scripts/import-osm.mjs
- * Potrebuje:  NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY v .env.local
- *
- * Licencia: dáta OSM sú pod ODbL — v aplikácii musí byť uvedená atribúcia.
- */
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
 
-// jednoduché načítanie .env.local bez extra závislostí
 try {
   readFileSync('.env.local', 'utf8').split('\n').forEach((line) => {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   });
-} catch { /* .env.local nemusí existovať v CI */ }
+} catch {  }
 
-// odrezeme koncove lomitko — inak vznikne '//rest/v1/...' a gateway vrati chybu
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!SUPABASE_URL || !SERVICE_KEY) {
@@ -24,7 +15,6 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
   process.exit(1);
 }
 
-// Kontrola formatu URL — casta chyba je vlozit adresu dashboardu namiesto API.
 if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(SUPABASE_URL)) {
   console.error('\nNEXT_PUBLIC_SUPABASE_URL vyzera nespravne:');
   console.error('  ' + SUPABASE_URL);
@@ -47,7 +37,6 @@ out center tags;`;
 
 const yes = (v) => v === undefined ? true : v === 'yes';
 
-// Zrkadla Overpass — hlavny instancia byva pretazena alebo odmietne poziadavku.
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -55,7 +44,6 @@ const ENDPOINTS = [
   'https://overpass.osm.jp/api/interpreter',
 ];
 
-// Overpass vyzaduje identifikovatelny User-Agent, inak vrati 406/429.
 const UA = 'zalohomat/0.1 (https://github.com/Sargeist/zalohomat)';
 
 async function fetchOverpass() {
@@ -116,7 +104,6 @@ async function main() {
   console.log(`Na import: ${rows.length}`);
   const sb = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
-  // upsert po dávkach cez SQL funkciu (geography sa nedá poslať priamo cez REST)
   for (let i = 0; i < rows.length; i += 100) {
     const chunk = rows.slice(i, i + 100);
     const { error } = await sb.rpc('upsert_machines', { payload: chunk });

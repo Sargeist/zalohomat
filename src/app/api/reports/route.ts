@@ -15,7 +15,6 @@ const Body = z.object({
   turnstileToken: z.string().optional(),
 });
 
-/** IP nikdy neukladáme surovú — len soľou osolený hash na detekciu botnetov. */
 function hashIp(req: Request) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     ?? req.headers.get('x-real-ip') ?? '0.0.0.0';
@@ -24,7 +23,7 @@ function hashIp(req: Request) {
 
 async function verifyTurnstile(token?: string) {
   const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) return true;               // vypnuté vo vývoji
+  if (!secret) return true;
   if (!token) return false;
   const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
     method: 'POST',
@@ -52,7 +51,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
 
-  // Všetky ďalšie kontroly (vzdialenosť, rate limit, reputácia) beží v DB funkcii.
   const { data, error } = await sb.rpc('submit_report', {
     p_machine: b.machineId,
     p_status: b.status,

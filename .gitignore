@@ -6,3 +6,6 @@ out
 .DS_Store
 *.log
 .vercel
+shops-cache.json
+osm-cache-*.json
+shops-cache.json

@@ -1,16 +1,11 @@
-/** @type {import('next').NextConfig} */
-
 const isDev = process.env.NODE_ENV === 'development';
 
-/*  V produkcii je CSP prisna.
- *  V deve musime povolit 'unsafe-eval' (Next.js pouziva eval pre hot reload)
- *  a websocket na localhost, inak prehliadac zablokuje cely klientsky JS.  */
 const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
-  "img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org",
+  "img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.supabase.co",
   `connect-src 'self' https://*.supabase.co wss://*.supabase.co${isDev ? ' ws://localhost:* http://localhost:*' : ''}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",

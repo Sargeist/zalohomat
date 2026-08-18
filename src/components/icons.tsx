@@ -1,10 +1,3 @@
-/**
- * Ikonovy set — inline SVG, 24x24, stroke 1.8, zaoblene konce.
- * Vsetky pouzivaju currentColor, takze farbu riadi CSS.
- *
- * Ak chces neskor nahradit ikony z thenounproject.com:
- * stiahni SVG, vloz jeho <path> sem a nechaj wrapper <Svg> — zvysok sa neposunie.
- */
 type P = { size?: number; className?: string };
 
 const Svg = ({ size = 24, className, children }: P & { children: React.ReactNode }) => (
@@ -79,23 +72,12 @@ export const IconStore = (p: P) => (
   <Svg {...p}><path d="M4 9.5V20h16V9.5M2.5 9.5 4.6 4h14.8l2.1 5.5a3.2 3.2 0 0 1-6.4 0 3.2 3.2 0 0 1-6.4 0 3.2 3.2 0 0 1-6.2 0Z" /></Svg>
 );
 
-/** Ikona podla stavu automatu — pouziva sa v zozname aj na detaile */
 export const StatusIcon = ({ status, size = 22 }: { status: string; size?: number }) =>
   status === 'ok' ? <IconCheck size={size} />
   : status === 'issue' ? <IconAlert size={size} />
   : status === 'down' ? <IconCross size={size} />
   : <IconQuestion size={size} />;
 
-/* ============================================================
-   Podpora externych ikon (Iconshock, Noun Project, Feather…)
-   ------------------------------------------------------------
-   1. Stiahni SVG a uloz ho do  public/icons/<meno>.svg
-   2. Pouzi  <MaskIcon name="map" />  namiesto <IconMap />
-
-   Ikona sa vykresli cez CSS mask, takze si zachova currentColor
-   a bude sa farbit temou rovnako ako vstavane ikony — aj ked ma
-   povodny subor natvrdo zapisanu ciernu alebo bielu vypln.
-   ============================================================ */
 export const MaskIcon = ({ name, size = 22, className }: P & { name: string }) => (
   <span
     className={className}

@@ -1,11 +1,3 @@
-/**
- * Zaloha, ked Overpass API odmieta poziadavky:
- * stiahni data rucne cez overpass-turbo.eu (Export -> GeoJSON) a spusti:
- *
- *   node scripts/import-file.mjs export.geojson
- *
- * Zvlada aj surovy JSON z Overpass ({ elements: [...] }).
- */
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
 
@@ -14,9 +6,8 @@ try {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   });
-} catch { /* ignore */ }
+} catch {  }
 
-// odrezeme koncove lomitko — inak vznikne '//rest/v1/...' a gateway vrati chybu
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const file = process.argv[2];
@@ -24,7 +15,6 @@ const file = process.argv[2];
 if (!file) { console.error('Pouzitie: node scripts/import-file.mjs export.geojson'); process.exit(1); }
 if (!SUPABASE_URL || !SERVICE_KEY) { console.error('Chyba .env.local'); process.exit(1); }
 
-// Kontrola formatu URL — casta chyba je vlozit adresu dashboardu namiesto API.
 if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(SUPABASE_URL)) {
   console.error('\nNEXT_PUBLIC_SUPABASE_URL vyzera nespravne:');
   console.error('  ' + SUPABASE_URL);
@@ -37,7 +27,6 @@ if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(SUPABASE_URL)) {
 const yes = (v) => v === undefined ? true : v === 'yes';
 const raw = JSON.parse(readFileSync(file, 'utf8'));
 
-// GeoJSON z overpass-turbo alebo surovy Overpass JSON
 const items = raw.features
   ? raw.features.map((f) => ({
       id: (f.id ?? '').toString().replace('/', '/'),

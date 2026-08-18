@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "next lint",
     "import:osm": "node scripts/import-osm.mjs",
-    "import:file": "node scripts/import-file.mjs"
+    "import:file": "node scripts/import-file.mjs",
+    "geocode": "node scripts/geocode.mjs",
+    "import:shops": "node scripts/import-shops.mjs",
+    "diagnose": "node scripts/diagnose.mjs",
+    "import:city": "node scripts/import-city.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

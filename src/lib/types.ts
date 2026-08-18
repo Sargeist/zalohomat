@@ -21,6 +21,10 @@ export interface Machine {
   status_at: string | null;
   open_now?: boolean | null;
   availability?: string | null;
+  photo_ref?: string | null;
+  photo_credit?: string | null;
+  quality?: number;
+  machine_presence?: 'yes' | 'manual' | 'no' | 'unknown';
 }
 
 export interface Report {

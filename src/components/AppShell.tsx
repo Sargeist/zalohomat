@@ -4,25 +4,47 @@ import dynamic from 'next/dynamic';
 import { supabase, ensureSession } from '@/lib/supabase-browser';
 import { makeT, agoText, reasonsFor, type Lang } from '@/lib/i18n';
 import { effStatus, freshness, statusColor, formatDistance, minutesSince } from '@/lib/status';
+import { liveness, rankForHero } from '@/lib/liveness';
+import { hoursToday } from '@/lib/hours';
+import { fullTitle, street, googleMapsUrl, googleDirectionsUrl } from '@/lib/format';
 import type { Machine, Report, Status } from '@/lib/types';
 import {
   IconMap, IconList, IconAward, IconInfo, IconPlus, IconSearch, IconBack,
   IconClose, IconNavigate, IconStore, IconRefresh, StatusIcon,
 } from './icons';
+import { MachinePhoto, BrandBadge, BrandMark } from './Photo';
+
+const photoUrl = (m: Machine) => (m.photo_ref ? `/api/photo?ref=${encodeURIComponent(m.photo_ref)}` : null);
 
 const MapView = dynamic(() => import('./MapView'), { ssr: false });
+type Bounds = { south: number; west: number; north: number; east: number };
 
 const BRATISLAVA: [number, number] = [48.1486, 17.1077];
 const REPORT_RADIUS_M = 150;
 type View = 'home' | 'list' | 'detail' | 'points' | 'info';
 type Filter = 'all' | 'ok' | 'cans' | 'big';
 
+function withDistance(list: Machine[], pos: [number, number]): Machine[] {
+  const R = 6371000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  return list.map((m) => {
+    const dLat = rad(m.lat - pos[0]);
+    const dLng = rad(m.lng - pos[1]);
+    const h =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(pos[0])) * Math.cos(rad(m.lat)) * Math.sin(dLng / 2) ** 2;
+    return { ...m, distance_m: 2 * R * Math.asin(Math.sqrt(h)) };
+  });
+}
+
 export default function AppShell() {
   const [lang, setLang] = useState<Lang>('sk');
   const t = useMemo(() => makeT(lang), [lang]);
 
   const [pos, setPos] = useState<[number, number]>(BRATISLAVA);
-  const [machines, setMachines] = useState<Machine[]>([]);
+
+  const [mapPoints, setMapPoints] = useState<Machine[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>('home');
   const [filter, setFilter] = useState<Filter>('all');
@@ -32,7 +54,6 @@ export default function AppShell() {
   const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
   const [profile, setProfile] = useState<{ points: number; reports_total: number; reports_confirmed: number } | null>(null);
 
-  // vyhladavanie
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Machine[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -42,22 +63,42 @@ export default function AppShell() {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (p) => setPos([p.coords.latitude, p.coords.longitude]),
-      () => { /* poloha zamietnuta — ostavame na predvolenom strede */ },
+      () => {  },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
     );
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (b?: Bounds) => {
+    const box = b ?? {
+      south: pos[0] - 0.09, north: pos[0] + 0.09,
+      west: pos[1] - 0.14, east: pos[1] + 0.14,
+    };
     setLoading(true);
     try {
-      const r = await fetch(`/api/machines?lat=${pos[0]}&lng=${pos[1]}&radius=8000`);
+      const q = new URLSearchParams({
+        south: String(box.south), west: String(box.west),
+        north: String(box.north), east: String(box.east),
+        lat: String(pos[0]), lng: String(pos[1]),
+      });
+      const r = await fetch(`/api/machines/bbox?${q}`);
       const json = await r.json();
-      setMachines(json.machines ?? []);
-    } catch { /* offline — ponechame stare data */ }
-    finally { setLoading(false); }
+      if (json.error) {
+        console.error('/api/machines/bbox:', json.error);
+      } else {
+        setMapPoints(withDistance(json.machines ?? [], pos));
+        setTruncated(Boolean(json.truncated));
+      }
+    } catch (e) {
+      console.error('/api/machines/bbox:', e);
+    } finally {
+      setLoading(false);
+    }
   }, [pos]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadBounds = useCallback((b: Bounds) => { load(b); }, [load]);
+
   useEffect(() => {
     const id = setInterval(load, 60000);
     return () => clearInterval(id);
@@ -69,7 +110,6 @@ export default function AppShell() {
       .then(({ data }) => data && setProfile(data));
   }, [view]);
 
-  /* ---------- vyhladavanie s oneskorenim ---------- */
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (view !== 'list') return;
@@ -86,27 +126,35 @@ export default function AppShell() {
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [query, view, pos]);
 
+  const passesFilter = useCallback((m: Machine) => {
+    if (filter === 'ok') return liveness(m).status === 'ok';
+    if (filter === 'cans') return m.accepts_cans;
+    if (filter === 'big') return m.type === 'big';
+    return true;
+  }, [filter]);
+
+  const pool = mapPoints;
+
+  const visible = useMemo(
+    () => [...pool].filter(passesFilter).sort((a, b) => a.distance_m - b.distance_m).slice(0, 60),
+    [pool, passesFilter]
+  );
+
+  const nearestOk = useMemo(
+    () => [...pool.filter((m) => liveness(m).status === 'ok')].sort(rankForHero)[0],
+    [pool]
+  );
   const open = useCallback(async (id: string) => {
-    const m = [...machines, ...(results ?? [])].find((x) => x.id === id);
+    const m = [...pool, ...(results ?? [])].find((x) => x.id === id);
     if (!m) return;
     setSelected(m); setView('detail'); setFeed([]);
     const { data } = await supabase
       .from('public_reports').select('*')
       .eq('machine_id', id).order('created_at', { ascending: false }).limit(12);
     setFeed((data as Report[]) ?? []);
-  }, [machines, results]);
+  }, [pool, results]);
 
-  const visible = useMemo(() => machines.filter((m) => {
-    if (filter === 'ok') return effStatus(m) === 'ok';
-    if (filter === 'cans') return m.accepts_cans;
-    if (filter === 'big') return m.type === 'big';
-    return true;
-  }).sort((a, b) => a.distance_m - b.distance_m), [machines, filter]);
-
-  const nearestOk = useMemo(
-    () => machines.filter((m) => effStatus(m) === 'ok').sort((a, b) => a.distance_m - b.distance_m)[0],
-    [machines]
-  );
+  const heroLive = nearestOk ? liveness(nearestOk) : null;
   const unit = { m: t('m'), km: t('km') };
 
   async function send(status: Status, coords: GeolocationCoordinates, reasons: string[]) {
@@ -135,17 +183,43 @@ export default function AppShell() {
   }
 
   const MachineRow = ({ m }: { m: Machine }) => {
-    const s = effStatus(m), f = freshness(m);
+    const l = liveness(m);
+    const s = l.status, f = freshness(m);
     return (
-      <button className="mc" onClick={() => open(m.id)}>
-        <span className={`av ${s}`}><StatusIcon status={s} /></span>
+      <button className="mc photo" onClick={() => open(m.id)}>
+        <span className="thumb">
+          <MachinePhoto photo={photoUrl(m)} name={m.name} chain={m.chain} lat={m.lat} lng={m.lng} rounded={16} zoom={17} />
+          {l.kind !== 'no_machine' && (
+            <span className={`badge ${s} ${l.kind === 'presumed' ? 'soft' : ''}`}>
+              <StatusIcon status={s} size={12} />
+            </span>
+          )}
+        </span>
         <span style={{ flex: 1, minWidth: 0 }}>
-          <span className="nm">{m.name}</span>
-          <span className="ad">{[m.address, m.city].filter(Boolean).join(', ') || '—'}</span>
-          <span className={`stat ${s} f${f}`}>
-            <span className="bars"><i style={{ height: 4 }} /><i style={{ height: 7 }} /><i style={{ height: 11 }} /></span>
-            {t(s)}{m.status_at ? ` · ${agoText(minutesSince(m.status_at), t)}` : ''}
+          <span className="nm">
+            {m.name}
+            {street(m) && <span className="street">, {street(m)}</span>}
           </span>
+          <span className="ad">{m.city || t('noAddress')}</span>
+          {l.kind === 'no_machine' ? (
+            <span className="stat nomachine">{t('noMachine')}</span>
+          ) : l.kind === 'confirmed' ? (
+            <span className={`stat ${s} f${f}`}>
+              <span className="bars"><i style={{ height: 4 }} /><i style={{ height: 7 }} /><i style={{ height: 11 }} /></span>
+              {t(s)} · {agoText(minutesSince(m.status_at), t)}
+            </span>
+          ) : l.kind === 'presumed' ? (
+            <span className={`stat presumed ${s}`}>
+              {l.reason === 'permanently_closed' ? t('permClosed')
+                : l.reason === 'closed' ? t('presumedClosed')
+                : l.reason === 'assumed_closed' ? `${t('presumedClosed')} · ${t('hoursUnknown')}`
+                : l.reason === 'assumed_open'
+                  ? `${t('presumedOk')} · ${t('hoursUnknown')}`
+                  : `${t('presumedOk')} · ${t('confidence', { n: Math.round(l.probability * 100) })}`}
+            </span>
+          ) : (
+            <span className="stat unknown">{t('unknown')}</span>
+          )}
         </span>
         <span className="rt">
           <b>{m.distance_m ? formatDistance(m.distance_m, unit) : ''}</b>
@@ -158,7 +232,7 @@ export default function AppShell() {
   return (
     <div className="app">
       <div className="views">
-        {/* ============ MAPA ============ */}
+        {}
         <section className={`view ${view === 'home' ? 'on' : ''}`}>
           <div className="hd">
             <div className="loc"><small>{t('loc')}</small><b>Bratislava</b></div>
@@ -170,11 +244,31 @@ export default function AppShell() {
           </div>
 
           {nearestOk ? (
-            <button className="hero" onClick={() => open(nearestOk.id)}>
-              <span className="badge"><span className="blink" />{t('live')}</span>
-              <div className="lbl">{t('heroLabel')}</div>
-              <div className="big">{formatDistance(nearestOk.distance_m, unit)}</div>
-              <div className="sub">{nearestOk.name} · {agoText(minutesSince(nearestOk.status_at), t)}</div>
+            <button className="phero" onClick={() => open(nearestOk.id)}>
+              <span className="bg">
+                <MachinePhoto photo={photoUrl(nearestOk)} name={nearestOk.name} chain={nearestOk.chain} lat={nearestOk.lat} lng={nearestOk.lng} rounded={0} zoom={16} />
+              </span>
+              <span className="sc" />
+              <span className="topright">
+                {heroLive?.kind === 'confirmed'
+                  ? <span className="livepill"><span className="blink" />{t('live')}</span>
+                  : <span className="livepill soft">{t('confidence', { n: Math.round((heroLive?.probability ?? 0) * 100) })}</span>}
+              </span>
+              <span className="body">
+                <span className="lbl">
+                  {heroLive?.kind === 'confirmed' ? t('heroLabel') : t('heroPresumed')}
+                </span>
+                <span className="ttl">{fullTitle(nearestOk)}</span>
+                <span className="meta">
+                  <span className="dist">{formatDistance(nearestOk.distance_m, unit)}</span>
+                  <BrandBadge name={nearestOk.name} chain={nearestOk.chain} size={24} radius={8} />
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {heroLive?.kind === 'confirmed'
+                      ? agoText(minutesSince(nearestOk.status_at), t)
+                      : hoursToday(nearestOk.opening_hours) ?? t('byHours')}
+                  </span>
+                </span>
+              </span>
             </button>
           ) : (
             <div className="hero">
@@ -185,10 +279,19 @@ export default function AppShell() {
           )}
 
           <div className="mapcard">
-            <MapView machines={visible} center={pos} onSelect={open} />
+            <MapView
+              machines={pool.filter(passesFilter)}
+              center={pos}
+              onSelect={open}
+              onBoundsChange={loadBounds}
+            />
             <div className="maplbl"><i />
-              {t('works', { a: machines.filter((m) => effStatus(m) === 'ok').length, b: machines.length })}
+              {t('works', {
+                a: pool.filter((m) => liveness(m).status === 'ok').length,
+                b: pool.length,
+              })}
             </div>
+            {truncated && <div className="maphint">{t('mapTruncated')}</div>}
           </div>
 
           <div className="pills">
@@ -201,12 +304,14 @@ export default function AppShell() {
           </div>
 
           <div className="st"><h2>{t('near')}</h2><span>{visible.length}</span></div>
-          {loading && <div className="empty">{t('loading')}</div>}
-          {!loading && visible.length === 0 && <div className="empty">{t('empty')}</div>}
+          {loading && pool.length === 0 && <div className="empty">{t('loading')}</div>}
+          {!loading && visible.length === 0 && (
+            <div className="empty">{filter === 'all' ? t('empty') : t('emptyFilter')}</div>
+          )}
           {visible.map((m) => <MachineRow key={m.id} m={m} />)}
         </section>
 
-        {/* ============ ZOZNAM + VYHLADAVANIE ============ */}
+        {}
         <section className={`view ${view === 'list' ? 'on' : ''}`}>
           <div className="hd"><div className="loc"><small>{t('allMachines')}</small><b>{t('nav2')}</b></div></div>
 
@@ -239,47 +344,99 @@ export default function AppShell() {
           )}
         </section>
 
-        {/* ============ DETAIL ============ */}
-        <section className={`view ${view === 'detail' ? 'on' : ''}`}>
+        {}
+        <section className={`view viewpad ${view === 'detail' ? 'on' : ''}`}>
           {selected && (() => {
-            const s = effStatus(selected);
-            const heroKey = s === 'ok' ? 'hOk' : s === 'issue' ? 'hIssue' : s === 'down' ? 'hDown' : 'hUnknown';
+            const st = effStatus(selected);
+            const dl = liveness(selected);
+            const heroKey = st === 'ok' ? 'hOk' : st === 'issue' ? 'hIssue' : st === 'down' ? 'hDown' : 'hUnknown';
             return (
               <>
-                <div className="dhd">
-                  <button className="rnd" onClick={() => setView('home')} aria-label={t('back')}>
-                    <IconBack size={20} />
-                  </button>
-                  <h1>{selected.name}<small>{[selected.address, selected.city].filter(Boolean).join(', ') || '—'}</small></h1>
+                {}
+                <div className="dphoto">
+                  <div className="bg">
+                    <MachinePhoto photo={photoUrl(selected)} name={selected.name} chain={selected.chain} lat={selected.lat} lng={selected.lng} rounded={0} zoom={17} />
+                  </div>
+                  <div className="sc" />
+                  <div className="nav-top">
+                    <button className="glassbtn" onClick={() => setView('home')} aria-label={t('back')}>
+                      <IconBack size={19} />
+                    </button>
+                    <div style={{ flex: 1 }} />
+                    <a className="glassbtn"
+                       href={`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`}
+                       target="_blank" rel="noreferrer noopener" aria-label={t('route')}>
+                      <IconNavigate size={18} />
+                    </a>
+                  </div>
+                  {selected.photo_credit && <div className="credit">{selected.photo_credit}</div>}
                 </div>
-                <div className={`shero ${s}`}>
-                  <div className="ring"><StatusIcon status={s} size={28} /></div>
-                  <div className="big">{t(heroKey as 'hOk')}</div>
+
+                {}
+                <div className="gcard">
+                  <div className="row1">
+                    <BrandBadge name={selected.name} chain={selected.chain} size={52} radius={18} />
+                    <h1>{selected.name}</h1>
+                  </div>
                   <div className="sub">
-                    {s === 'unknown' ? t('noReport')
-                      : t('lastReport', { ago: agoText(minutesSince(selected.status_at), t) })}
+                    {[street(selected), selected.city].filter(Boolean).join(', ') || t('noAddress')}
+                  </div>
+
+                  <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {dl.kind === 'no_machine' ? (
+                      <span className="livepill unknown">{t('noMachine')}</span>
+                    ) : dl.kind === 'confirmed' ? (
+                      <span className={`livepill ${st}`}>
+                        <StatusIcon status={st} size={13} />{t(heroKey as 'hOk')}
+                      </span>
+                    ) : dl.kind === 'presumed' ? (
+                      <>
+                        <span className={`livepill soft ${dl.status}`}>
+                          <StatusIcon status={dl.status} size={13} />
+                          {dl.reason === 'permanently_closed' ? t('permClosed')
+                            : dl.reason === 'closed' ? t('presumedClosed')
+                            : dl.reason === 'assumed_closed' ? t('presumedClosed')
+                            : `${t('presumedOk')} · ${t('confidence', { n: Math.round(dl.probability * 100) })}`}
+                        </span>
+                        <span className="tag off">{t('notConfirmed')}</span>
+                      </>
+                    ) : (
+                      <span className="livepill unknown">{t('hUnknown')}</span>
+                    )}
+                  </div>
+
+                  <div className="gstats">
+                    <div>
+                      <b style={{ color: statusColor(st) }}>
+                        {selected.status_at ? agoText(minutesSince(selected.status_at), t) : '—'}
+                      </b>
+                      <small>{t('tLast')}</small>
+                    </div>
+                    <div><b>{selected.status_reports}</b><small>{t('tConf')}</small></div>
+                    <div><b>{formatDistance(selected.distance_m, unit)}</b><small>{t('tDist')}</small></div>
+                  </div>
+
+                  <div className="tags">
+                    <span className={`tag ${selected.accepts_pet ? 'on' : 'off'}`}>PET</span>
+                    <span className={`tag ${selected.accepts_cans ? 'on' : 'off'}`}>{t('cans')}</span>
+                    <span className="tag">
+                      {selected.type === 'manual' ? t('vManual') : selected.type === 'big' ? t('vBig') : t('vAuto')}
+                    </span>
+                    {selected.opening_hours && <span className="tag">{selected.opening_hours}</span>}
+                    {selected.open_now === true && <span className="tag on">{t('open')}</span>}
+                    {selected.open_now === false && <span className="tag off">{t('closed')}</span>}
                   </div>
                 </div>
-                <div className="tri">
-                  <div><b style={{ color: statusColor(s) }}>
-                    {selected.status_at ? agoText(minutesSince(selected.status_at), t) : '—'}</b>
-                    <small>{t('tLast')}</small></div>
-                  <div><b>{selected.status_reports}</b><small>{t('tConf')}</small></div>
-                  <div><b>{formatDistance(selected.distance_m, unit)}</b><small>{t('tDist')}</small></div>
-                </div>
+
                 <Timeline feed={feed} t={t} />
-                <div className="rows">
-                  <div className="row"><span className="k">{t('kHours')}</span><span className="v">
-                    {selected.opening_hours ?? '—'}
-                    {selected.open_now !== null && selected.open_now !== undefined &&
-                      ` · ${selected.open_now ? t('open') : t('closed')}`}
-                  </span></div>
-                  <div className="row"><span className="k">{t('kTakes')}</span><span className="v">
-                    {selected.accepts_pet ? 'PET' : ''}{selected.accepts_cans ? ' · ' + t('cans') : ''}</span></div>
-                  <div className="row"><span className="k">{t('kType')}</span><span className="v">
-                    {selected.type === 'manual' ? t('vManual') : selected.type === 'big' ? t('vBig') : t('vAuto')}</span></div>
-                  <div className="row"><span className="k">{t('kRefund')}</span><span className="v">{t('vCoupon')}</span></div>
-                </div>
+
+                {dl.kind !== 'confirmed' && (
+                  <div className="explain">
+                    <b>{t('howWeKnow')}</b>
+                    <span>{t('howText')}</span>
+                  </div>
+                )}
+
                 <div className="st"><h2>{t('feed')}</h2></div>
                 <div className="feed">
                   {feed.length === 0 && <div className="fi"><span className="n">{t('noReports')}</span></div>}
@@ -294,12 +451,16 @@ export default function AppShell() {
                     </div>
                   ))}
                 </div>
+
                 <div className="acts">
-                  <a className="btn gh"
-                     href={`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`}
-                     target="_blank" rel="noreferrer noopener">
-                    <IconNavigate size={19} />{t('route')}
+                  <a className="btn gh" href={googleMapsUrl(selected)} target="_blank" rel="noreferrer noopener">
+                    <IconMap size={18} />{t('onMap')}
                   </a>
+                  <a className="btn gh" href={googleDirectionsUrl(selected)} target="_blank" rel="noreferrer noopener">
+                    <IconNavigate size={18} />{t('route')}
+                  </a>
+                </div>
+                <div className="acts">
                   <button className="btn pri" onClick={() => setSheet(true)}>{t('report')}</button>
                 </div>
                 <div className="src"><span>{t('source')}</span></div>
@@ -308,7 +469,7 @@ export default function AppShell() {
           })()}
         </section>
 
-        {/* ============ BODY ============ */}
+        {}
         <section className={`view ${view === 'points' ? 'on' : ''}`}>
           <div className="hd"><div className="loc"><small>{t('pContrib')}</small><b>{t('pTitle')}</b></div></div>
           <div className="prof">
@@ -333,13 +494,13 @@ export default function AppShell() {
           </div>
         </section>
 
-        {/* ============ INFO ============ */}
+        {}
         <section className={`view ${view === 'info' ? 'on' : ''}`}>
           <div className="hd"><div className="loc"><small>{t('about')}</small><b>Zálohomat</b></div></div>
           <div className="rows">
             <div className="row"><span className="k">{t('iSources')}</span><span className="v">OSM · {t('iUsers')}</span></div>
             <div className="row"><span className="k">{t('iRefresh')}</span><span className="v">15 min</span></div>
-            <div className="row"><span className="k">{t('iMachines')}</span><span className="v">{machines.length}</span></div>
+            <div className="row"><span className="k">{t('iMachines')}</span><span className="v">{pool.length}</span></div>
           </div>
           <div className="src"><span>{t('iLicence')}</span></div>
           <div className="src" style={{ marginTop: 12 }}><span>{t('iPrivacy')}</span></div>
@@ -347,21 +508,21 @@ export default function AppShell() {
       </div>
 
       <nav className="nav">
-        <button className={view === 'home' || view === 'detail' ? 'on' : ''} onClick={() => setView('home')}>
-          <IconMap size={21} />{t('nav1')}
+        <button className={view === 'home' || view === 'detail' ? 'on' : ''} onClick={() => setView('home')} aria-label={t('nav1')}>
+          <IconMap size={22} />
         </button>
-        <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
-          <IconList size={21} />{t('nav2')}
+        <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} aria-label={t('nav2')}>
+          <IconList size={22} />
         </button>
         <button className="fab" onClick={() => { if (selected) setSheet(true); else setView('home'); }}
                 aria-label={t('report')}>
           <IconPlus size={24} />
         </button>
-        <button className={view === 'points' ? 'on' : ''} onClick={() => setView('points')}>
-          <IconAward size={21} />{t('nav3')}
+        <button className={view === 'points' ? 'on' : ''} onClick={() => setView('points')} aria-label={t('nav3')}>
+          <IconAward size={22} />
         </button>
-        <button className={view === 'info' ? 'on' : ''} onClick={() => setView('info')}>
-          <IconInfo size={21} />{t('nav4')}
+        <button className={view === 'info' ? 'on' : ''} onClick={() => setView('info')} aria-label={t('nav4')}>
+          <IconInfo size={22} />
         </button>
       </nav>
 
@@ -375,7 +536,6 @@ export default function AppShell() {
   );
 }
 
-/* ---------- 24-hodinova os stavu ---------- */
 function Timeline({ feed, t }: { feed: Report[]; t: ReturnType<typeof makeT> }) {
   const hours: (Status | null)[] = Array(24).fill(null);
   feed.forEach((r) => {
@@ -399,7 +559,6 @@ function Timeline({ feed, t }: { feed: Report[]; t: ReturnType<typeof makeT> }) 
   );
 }
 
-/* ---------- sablona hlasenia ---------- */
 type GeoState =
   | { kind: 'wait' }
   | { kind: 'ok'; coords: GeolocationCoordinates; distance: number }
