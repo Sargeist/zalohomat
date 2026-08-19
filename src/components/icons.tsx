@@ -72,6 +72,10 @@ export const IconStore = (p: P) => (
   <Svg {...p}><path d="M4 9.5V20h16V9.5M2.5 9.5 4.6 4h14.8l2.1 5.5a3.2 3.2 0 0 1-6.4 0 3.2 3.2 0 0 1-6.4 0 3.2 3.2 0 0 1-6.2 0Z" /></Svg>
 );
 
+export const IconStatus = (p: P) => (
+  <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M12 8.2v4.6l3 1.8" /></Svg>
+);
+
 export const StatusIcon = ({ status, size = 22 }: { status: string; size?: number }) =>
   status === 'ok' ? <IconCheck size={size} />
   : status === 'issue' ? <IconAlert size={size} />

@@ -7,9 +7,10 @@ import { effStatus, freshness, statusColor, formatDistance, minutesSince } from 
 import { liveness, rankForHero } from '@/lib/liveness';
 import { hoursToday } from '@/lib/hours';
 import { fullTitle, street, googleMapsUrl, googleDirectionsUrl } from '@/lib/format';
+import { CHAIN_FILTERS, brandOf } from '@/lib/chains';
 import type { Machine, Report, Status } from '@/lib/types';
 import {
-  IconMap, IconList, IconAward, IconInfo, IconPlus, IconSearch, IconBack,
+  IconMap, IconList, IconInfo, IconSearch, IconBack, IconStatus,
   IconClose, IconNavigate, IconStore, IconRefresh, StatusIcon,
 } from './icons';
 import { MachinePhoto, BrandBadge, BrandMark } from './Photo';
@@ -22,8 +23,8 @@ type Cluster = { lat: number; lng: number; n: number; n_machine: number };
 
 const BRATISLAVA: [number, number] = [48.1486, 17.1077];
 const REPORT_RADIUS_M = 150;
-type View = 'home' | 'list' | 'detail' | 'points' | 'info';
-type Filter = 'all' | 'ok' | 'cans' | 'big';
+type View = 'home' | 'list' | 'detail' | 'info';
+type Filter = 'all' | 'ok' | 'big';
 
 function withDistance(list: Machine[], pos: [number, number]): Machine[] {
   const R = 6371000;
@@ -53,7 +54,38 @@ export default function AppShell() {
   const [feed, setFeed] = useState<Report[]>([]);
   const [sheet, setSheet] = useState(false);
   const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
-  const [profile, setProfile] = useState<{ points: number; reports_total: number; reports_confirmed: number } | null>(null);
+  const [chainFilter, setChainFilter] = useState<string | null>(null);
+  const [cansOnly, setCansOnly] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const dropBtn = useRef<HTMLButtonElement>(null);
+
+  const toggleMenu = useCallback(() => {
+    setMenuOpen((open) => {
+      if (open) return false;
+      const r = dropBtn.current?.getBoundingClientRect();
+      if (r) {
+        const width = 212;
+        setMenuPos({
+          top: r.bottom + 8,
+          left: Math.min(r.left, window.innerWidth - width - 12),
+        });
+      }
+      return true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [menuOpen]);
+  const [legend, setLegend] = useState(false);
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Machine[] | null>(null);
@@ -113,11 +145,6 @@ export default function AppShell() {
     return () => clearInterval(id);
   }, [load]);
 
-  useEffect(() => {
-    if (view !== 'points') return;
-    supabase.from('reporters').select('points, reports_total, reports_confirmed').single()
-      .then(({ data }) => data && setProfile(data));
-  }, [view]);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -136,11 +163,12 @@ export default function AppShell() {
   }, [query, view, pos]);
 
   const passesFilter = useCallback((m: Machine) => {
+    if (chainFilter && (m.chain ?? '') !== chainFilter) return false;
+    if (cansOnly && !m.accepts_cans) return false;
     if (filter === 'ok') return liveness(m).status === 'ok';
-    if (filter === 'cans') return m.accepts_cans;
     if (filter === 'big') return m.type === 'big';
     return true;
-  }, [filter]);
+  }, [filter, chainFilter, cansOnly]);
 
   const pool = mapPoints;
 
@@ -306,9 +334,76 @@ export default function AppShell() {
           </div>
 
           <div className="pills">
-            {([['all', t('all')], ['ok', t('ok')], ['cans', t('cans')], ['big', t('big')]] as [Filter, string][])
+            <div className="dropwrap">
+              <button
+                ref={dropBtn}
+                className="pill drop"
+                aria-pressed={Boolean(chainFilter) || cansOnly}
+                aria-expanded={menuOpen}
+                onClick={toggleMenu}
+                style={chainFilter
+                  ? { background: brandOf(chainFilter, chainFilter).color,
+                      color: brandOf(chainFilter, chainFilter).fg, borderColor: 'transparent' }
+                  : undefined}
+              >
+                {chainFilter ?? (cansOnly ? t('cans') : t('more'))}
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+                     style={{ transform: menuOpen ? 'rotate(180deg)' : 'none', transition: 'transform .18s' }}>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+
+              {menuOpen && (
+                <>
+                  <div className="dropback" onClick={() => setMenuOpen(false)} />
+                  <div
+                    className="dropmenu"
+                    role="menu"
+                    style={menuPos ? { top: menuPos.top, left: menuPos.left } : undefined}
+                  >
+                    <div className="dropsec">{t('byChain')}</div>
+                    <button
+                      className="dropitem"
+                      aria-pressed={chainFilter === null}
+                      onClick={() => { setChainFilter(null); setMenuOpen(false); }}
+                    >
+                      <span className="sw all" />{t('allChains')}
+                    </button>
+                    {CHAIN_FILTERS.map((c) => {
+                      const b = brandOf(c, c);
+                      return (
+                        <button
+                          key={c}
+                          className="dropitem"
+                          aria-pressed={chainFilter === c}
+                          onClick={() => { setChainFilter(chainFilter === c ? null : c); setMenuOpen(false); }}
+                        >
+                          <span className="sw" style={{ background: b.color }} />{c}
+                        </button>
+                      );
+                    })}
+                    <div className="dropsec">{t('byType')}</div>
+                    <button
+                      className="dropitem"
+                      aria-pressed={cansOnly}
+                      onClick={() => setCansOnly((v) => !v)}
+                    >
+                      <span className="sw ring" />{t('cans')}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {([['ok', t('ok')], ['big', t('big')]] as [Exclude<Filter, 'all'>, string][])
               .map(([k, label]) => (
-                <button key={k} className="pill" aria-pressed={filter === k} onClick={() => setFilter(k)}>
+                <button
+                  key={k}
+                  className="pill"
+                  aria-pressed={filter === k}
+                  onClick={() => setFilter(filter === k ? 'all' : k)}
+                >
                   {k === 'ok' && <i style={{ background: 'var(--ok)' }} />}{label}
                 </button>
               ))}
@@ -389,8 +484,9 @@ export default function AppShell() {
                     <BrandBadge name={selected.name} chain={selected.chain} size={52} radius={18} />
                     <h1>{selected.name}</h1>
                   </div>
-                  <div className="sub">
-                    {[street(selected), selected.city].filter(Boolean).join(', ') || t('noAddress')}
+                  <div className="sub subrow">
+                    <span>{[street(selected), selected.city].filter(Boolean).join(', ') || t('noAddress')}</span>
+                    <button className="helpbtn" onClick={() => setLegend(true)} aria-label={t('howWeKnow')}>?</button>
                   </div>
 
                   <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -441,13 +537,6 @@ export default function AppShell() {
 
                 <Timeline feed={feed} t={t} />
 
-                {dl.kind !== 'confirmed' && (
-                  <div className="explain">
-                    <b>{t('howWeKnow')}</b>
-                    <span>{t('howText')}</span>
-                  </div>
-                )}
-
                 <div className="st"><h2>{t('feed')}</h2></div>
                 <div className="feed">
                   {feed.length === 0 && <div className="fi"><span className="n">{t('noReports')}</span></div>}
@@ -472,37 +561,14 @@ export default function AppShell() {
                   </a>
                 </div>
                 <div className="acts">
-                  <button className="btn pri" onClick={() => setSheet(true)}>{t('report')}</button>
+                  <button className="btn pri" onClick={() => setSheet(true)}>
+                    <IconStatus size={19} />{t('statusBtn')}
+                  </button>
                 </div>
                 <div className="src"><span>{t('source')}</span></div>
               </>
             );
           })()}
-        </section>
-
-        {}
-        <section className={`view ${view === 'points' ? 'on' : ''}`}>
-          <div className="hd"><div className="loc"><small>{t('pContrib')}</small><b>{t('pTitle')}</b></div></div>
-          <div className="prof">
-            <div className="ava">Z</div>
-            <div style={{ flex: 1 }}>
-              <b>{t('pContrib')}</b>
-              <small>{t('pLevel', { n: Math.floor((profile?.points ?? 0) / 300) + 1 })}</small>
-              <div className="lvl"><i style={{ width: `${((profile?.points ?? 0) % 300) / 3}%` }} /></div>
-            </div>
-          </div>
-          <div className="grid">
-            <div className="sc acc"><div className="h">{t('pPoints')}</div>
-              <div className="n">{profile?.points ?? 0}</div><div className="f">&nbsp;</div></div>
-            <div className="sc"><div className="h">{t('pReports')}</div>
-              <div className="n">{profile?.reports_total ?? 0}</div><div className="f">&nbsp;</div></div>
-            <div className="sc"><div className="h">{t('pAcc')}</div>
-              <div className="n">{profile && profile.reports_total > 0
-                ? Math.round((profile.reports_confirmed / profile.reports_total) * 100) + '%' : '—'}</div>
-              <div className="f">{t('pAccF')}</div></div>
-            <div className="sc"><div className="h">{t('pRank')}</div>
-              <div className="n">—</div><div className="f">{t('pRankF')}</div></div>
-          </div>
         </section>
 
         {}
@@ -513,8 +579,9 @@ export default function AppShell() {
             <div className="row"><span className="k">{t('iRefresh')}</span><span className="v">15 min</span></div>
             <div className="row"><span className="k">{t('iMachines')}</span><span className="v">{pool.length}</span></div>
           </div>
-          <div className="src"><span>{t('iLicence')}</span></div>
+          <div className="src"><span>{t('iDisclaimer')}</span></div>
           <div className="src" style={{ marginTop: 12 }}><span>{t('iPrivacy')}</span></div>
+          <div className="attrib">{t('iLicence')}</div>
         </section>
       </div>
 
@@ -524,13 +591,6 @@ export default function AppShell() {
         </button>
         <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} aria-label={t('nav2')}>
           <IconList size={22} />
-        </button>
-        <button className="fab" onClick={() => { if (selected) setSheet(true); else setView('home'); }}
-                aria-label={t('report')}>
-          <IconPlus size={24} />
-        </button>
-        <button className={view === 'points' ? 'on' : ''} onClick={() => setView('points')} aria-label={t('nav3')}>
-          <IconAward size={22} />
         </button>
         <button className={view === 'info' ? 'on' : ''} onClick={() => setView('info')} aria-label={t('nav4')}>
           <IconInfo size={22} />
@@ -543,6 +603,17 @@ export default function AppShell() {
                      onClose={() => setSheet(false)} onSend={send} />
       )}
       {toast && <div className={`toast on ${toast.bad ? 'bad' : ''}`}>{toast.text}</div>}
+
+      <div className={`scrim ${legend ? 'on' : ''}`} onClick={() => setLegend(false)} />
+      <div className={`sheet ${legend ? 'on' : ''}`} role="dialog" aria-modal="true">
+        <div className="grab" />
+        <h2>{t('howWeKnow')}</h2>
+        <p className="legendtext">{t('howText')}</p>
+        <div className="legendrow"><span className="lgd solid ok" /><span>{t('lgConfirmed')}</span></div>
+        <div className="legendrow"><span className="lgd dash ok" /><span>{t('lgPresumed')}</span></div>
+        <div className="legendrow"><span className="lgd solid down" /><span>{t('lgDown')}</span></div>
+        <div className="legendrow"><span className="lgd grey" /><span>{t('lgNoMachine')}</span></div>
+      </div>
     </div>
   );
 }

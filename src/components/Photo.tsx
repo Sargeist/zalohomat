@@ -128,7 +128,7 @@ export function BrandMark({
         fontWeight: 700,
         fontSize: `calc(${px} * 0.4)`,
         letterSpacing: '-.04em',
-        color: '#fff',
+        color: b.fg,
         lineHeight: 1,
         textShadow: '0 2px 10px rgba(0,0,0,.35)',
       }}
