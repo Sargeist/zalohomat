@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { brandOf, monogram } from '@/lib/chains';
+import { useLogo } from '@/lib/logos';
 import { mapThumb } from '@/lib/tiles';
 
 export function MachinePhoto({
@@ -65,23 +66,8 @@ export function MachinePhoto({
                          linear-gradient(to top, rgba(6,8,10,.82) 0%, rgba(6,8,10,.15) 55%, transparent 100%)`,
           }}
         />
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%,-50%)',
-            width: 30,
-            height: 30,
-            borderRadius: '50%',
-            background: `linear-gradient(145deg, ${b.color}, ${b.color2})`,
-            border: '2.5px solid rgba(255,255,255,.9)',
-            boxShadow: `0 4px 16px -2px ${b.color}cc`,
-            display: 'grid',
-            placeItems: 'center',
-          }}
-        >
-          <BrandMark name={name} chain={chain} size={17} />
+        <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}>
+          <BrandBadge name={name} chain={chain} size={30} radius={15} />
         </div>
       </div>
     );
@@ -107,17 +93,16 @@ export function MachinePhoto({
 export function BrandMark({
   name, chain, size = 44,
 }: { name?: string | null; chain?: string | null; size?: number | string }) {
-  const [noLogo, setNoLogo] = useState(false);
   const b = brandOf(name, chain);
+  const { url } = useLogo(b.key);
   const px = typeof size === 'number' ? `${size}px` : size;
 
-  if (b.key !== 'other' && !noLogo) {
+  if (url) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={`/logos/${b.key}.svg`}
+        src={url}
         alt={b.label}
-        onError={() => setNoLogo(true)}
         style={{ width: px, height: px, objectFit: 'contain', display: 'block' }}
       />
     );
@@ -142,6 +127,8 @@ export function BrandBadge({
   name, chain, size = 46, radius = 16,
 }: { name?: string | null; chain?: string | null; size?: number; radius?: number }) {
   const b = brandOf(name, chain);
+  const { url } = useLogo(b.key);
+
   return (
     <span
       style={{
@@ -151,11 +138,12 @@ export function BrandBadge({
         flex: 'none',
         display: 'grid',
         placeItems: 'center',
-        background: `linear-gradient(145deg, ${b.color}, ${b.color2})`,
+        padding: url ? Math.round(size * 0.14) : 0,
+        background: url ? '#fff' : `linear-gradient(145deg, ${b.color}, ${b.color2})`,
         boxShadow: `0 6px 18px -6px ${b.color}80`,
       }}
     >
-      <BrandMark name={name} chain={chain} size={Math.round(size * 0.62)} />
+      <BrandMark name={name} chain={chain} size={url ? Math.round(size * 0.72) : Math.round(size * 0.62)} />
     </span>
   );
 }
