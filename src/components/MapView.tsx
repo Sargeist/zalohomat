@@ -12,12 +12,14 @@ interface Props {
   machines: Machine[];
   clusters: Cluster[];
   center: [number, number];
+  zoom?: number;
+  userPos?: [number, number] | null;
   onSelect: (id: string) => void;
   onBoundsChange?: (b: Bounds, zoom: number) => void;
 }
 
 const DETAIL_ABOVE_ZOOM = 14;
-const RICH_MARKER_LIMIT = 90;
+const RICH_MARKER_LIMIT = 140;
 
 function clusterIcon(c: Cluster) {
   const size = c.n < 10 ? 34 : c.n < 50 ? 42 : c.n < 200 ? 50 : 58;
@@ -30,11 +32,15 @@ function clusterIcon(c: Cluster) {
   });
 }
 
-export default function MapView({ machines, clusters, center, onSelect, onBoundsChange }: Props) {
+export default function MapView({
+  machines, clusters, center, zoom = 13, userPos, onSelect, onBoundsChange,
+}: Props) {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
   const canvas = useRef<L.Canvas | null>(null);
+  const me = useRef<L.CircleMarker | null>(null);
+  const first = useRef<{ center: [number, number]; zoom: number }>({ center, zoom });
   const cb = useRef(onBoundsChange);
   cb.current = onBoundsChange;
 
@@ -47,7 +53,7 @@ export default function MapView({ machines, clusters, center, onSelect, onBounds
       zoomAnimation: true,
       markerZoomAnimation: false,
       wheelDebounceTime: 120,
-    }).setView(center, 13);
+    }).setView(first.current.center, first.current.zoom);
     map.current = m;
     canvas.current = L.canvas({ padding: 0.3 });
 
@@ -57,11 +63,6 @@ export default function MapView({ machines, clusters, center, onSelect, onBounds
       attribution: '&copy; OSM &copy; CARTO',
       updateWhenZooming: false,
       keepBuffer: 1,
-    }).addTo(m);
-
-    L.circleMarker(center, {
-      radius: 6, color: '#0B0D10', weight: 3, fillColor: '#2E7BFF', fillOpacity: 1,
-      renderer: canvas.current,
     }).addTo(m);
 
     layer.current = L.layerGroup().addTo(m);
@@ -81,7 +82,30 @@ export default function MapView({ machines, clusters, center, onSelect, onBounds
     emit();
 
     return () => { clearTimeout(timer); m.remove(); map.current = null; };
-  }, [center]);
+  }, []);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    m.setView(center, zoom, { animate: true });
+  }, [center, zoom]);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    if (!userPos) {
+      me.current?.remove();
+      me.current = null;
+      return;
+    }
+    if (me.current) me.current.setLatLng(userPos);
+    else {
+      me.current = L.circleMarker(userPos, {
+        radius: 6, color: '#0B0D10', weight: 3, fillColor: '#2E7BFF', fillOpacity: 1,
+        renderer: canvas.current!,
+      }).addTo(m);
+    }
+  }, [userPos]);
 
   useEffect(() => {
     const m = map.current;

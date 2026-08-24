@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic';
 
 const Query = z.object({
   q: z.string().max(60).default(''),
-  lat: z.coerce.number().min(47.5).max(49.7).optional(),
-  lng: z.coerce.number().min(16.7).max(22.7).optional(),
+  lat: z.coerce.number().finite().optional(),
+  lng: z.coerce.number().finite().optional(),
 });
 
 export async function GET(req: Request) {

@@ -8,6 +8,8 @@ import { liveness, rankForHero } from '@/lib/liveness';
 import { hoursToday } from '@/lib/hours';
 import { fullTitle, street, googleMapsUrl, googleDirectionsUrl } from '@/lib/format';
 import { CHAIN_FILTERS, brandOf } from '@/lib/chains';
+import { CITIES, nearestCity, savedCity, saveCity, type City } from '@/lib/cities';
+import CityPicker from './CityPicker';
 import type { Machine, Report, Status } from '@/lib/types';
 import {
   IconMap, IconList, IconInfo, IconSearch, IconBack, IconStatus,
@@ -44,6 +46,11 @@ export default function AppShell() {
   const t = useMemo(() => makeT(lang), [lang]);
 
   const [pos, setPos] = useState<[number, number]>(BRATISLAVA);
+  const [userPos, setUserPos] = useState<[number, number] | null>(null);
+  const [city, setCity] = useState<City | null>(null);
+  const [mapZoom, setMapZoom] = useState(12);
+  const [cityOpen, setCityOpen] = useState(false);
+  const [booted, setBooted] = useState(false);
 
   const [mapPoints, setMapPoints] = useState<Machine[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
@@ -93,13 +100,70 @@ export default function AppShell() {
 
   useEffect(() => {
     ensureSession().catch(console.error);
-    if (!navigator.geolocation) return;
+
+    const stored = savedCity();
+    if (stored) {
+      setCity(stored);
+      setPos([stored.lat, stored.lng]);
+      setMapZoom(stored.zoom);
+      setBooted(true);
+    }
+
+    if (!navigator.geolocation) {
+      if (!stored) setCityOpen(true);
+      setBooted(true);
+      return;
+    }
+
     navigator.geolocation.getCurrentPosition(
-      (p) => setPos([p.coords.latitude, p.coords.longitude]),
-      () => {  },
+      (p) => {
+        const here: [number, number] = [p.coords.latitude, p.coords.longitude];
+        setUserPos(here);
+        const { city: near, km } = nearestCity(here[0], here[1]);
+        if (!stored) {
+          if (km < 40) {
+            setCity(near);
+            setPos(here);
+            setMapZoom(near.zoom);
+          } else {
+            setCityOpen(true);
+          }
+        }
+        setBooted(true);
+      },
+      () => {
+        if (!stored) setCityOpen(true);
+        setBooted(true);
+      },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
     );
   }, []);
+
+  const chooseCity = useCallback((c: City) => {
+    setCity(c);
+    saveCity(c);
+    setPos([c.lat, c.lng]);
+    setMapZoom(c.zoom);
+    setCityOpen(false);
+  }, []);
+
+  const useMyLocation = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const here: [number, number] = [p.coords.latitude, p.coords.longitude];
+        setUserPos(here);
+        const { city: near } = nearestCity(here[0], here[1]);
+        setCity(near);
+        saveCity(near);
+        setPos(here);
+        setMapZoom(14);
+        setCityOpen(false);
+      },
+      () => setToast({ text: t('geoDenied'), bad: true }),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, [t]);
 
   const inflight = useRef<AbortController | null>(null);
 
@@ -126,7 +190,11 @@ export default function AppShell() {
         console.error('/api/machines/bbox:', json.error);
         return;
       }
-      const points = withDistance([...(json.points ?? []), ...(json.extra ?? [])], pos);
+      const merged = new Map<string, Machine>();
+      for (const m of [...(json.points ?? []), ...(json.extra ?? [])]) {
+        if (!merged.has(m.id)) merged.set(m.id, m);
+      }
+      const points = withDistance([...merged.values()], pos);
       setMapPoints(points);
       setClusters(json.clusters ?? []);
     } catch (e) {
@@ -272,7 +340,16 @@ export default function AppShell() {
         {}
         <section className={`view ${view === 'home' ? 'on' : ''}`}>
           <div className="hd">
-            <div className="loc"><small>{t('loc')}</small><b>Bratislava</b></div>
+            <button className="loc citybtn" onClick={() => setCityOpen(true)}>
+              <small>{t('loc')}</small>
+              <b>
+                {city?.name ?? CITIES[0].name}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </b>
+            </button>
             <div className="langsw">
               {(['sk', 'ru'] as Lang[]).map((l) => (
                 <button key={l} aria-pressed={lang === l} onClick={() => setLang(l)}>{l.toUpperCase()}</button>
@@ -320,6 +397,8 @@ export default function AppShell() {
               machines={pool.filter(passesFilter)}
               clusters={clusters}
               center={pos}
+              zoom={mapZoom}
+              userPos={userPos}
               onSelect={open}
               onBoundsChange={loadBounds}
             />
@@ -603,6 +682,16 @@ export default function AppShell() {
                      onClose={() => setSheet(false)} onSend={send} />
       )}
       {toast && <div className={`toast on ${toast.bad ? 'bad' : ''}`}>{toast.text}</div>}
+
+      <CityPicker
+        open={cityOpen}
+        t={t}
+        current={city}
+        canClose={Boolean(city) || !booted}
+        onPick={chooseCity}
+        onUseLocation={useMyLocation}
+        onClose={() => setCityOpen(false)}
+      />
 
       <div className={`scrim ${legend ? 'on' : ''}`} onClick={() => setLegend(false)} />
       <div className={`sheet ${legend ? 'on' : ''}`} role="dialog" aria-modal="true">

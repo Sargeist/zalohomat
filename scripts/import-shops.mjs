@@ -16,17 +16,25 @@ if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SUPABASE_URL) || !SERVICE_KEY) 
 }
 
 const CHAINS = [
-  { key: 'Kaufland',     re: /kaufland/i,                   type: 'big' },
-  { key: 'Lidl',         re: /lidl/i,                       type: 'auto' },
-  { key: 'Tesco',        re: /tesco/i,                      type: 'big' },
-  { key: 'Billa',        re: /billa/i,                      type: 'auto' },
-  { key: 'COOP Jednota', re: /coop|jednota/i,               type: 'auto' },
-  { key: 'Terno',        re: /\bterno\b/i,                  type: 'auto' },
-  { key: 'Kraj',         re: /\bkraj\b/i,                   type: 'auto' },
-  { key: 'Fresh',        re: /\bfresh\b/i,                  type: 'auto' },
-  { key: 'CBA',          re: /\bcba\b/i,                    type: 'manual' },
-  { key: 'Metro',        re: /\bmetro\b/i,                  type: 'big' },
-  { key: 'Milk-Agro',    re: /milk[\s-]?agro/i,             type: 'manual' },
+  { key: 'Kaufland',     re: /kaufland/i,              machine: 'yes',    type: 'big' },
+  { key: 'Lidl',         re: /lidl/i,                  machine: 'yes',    type: 'auto' },
+  { key: 'Tesco',        re: /tesco/i,                 machine: 'yes',    type: 'big' },
+  { key: 'Billa',        re: /billa/i,                 machine: 'yes',    type: 'auto' },
+  { key: 'COOP Jednota', re: /coop|jednota/i,          machine: 'yes',    type: 'auto' },
+  { key: 'Terno',        re: /\bterno\b/i,             machine: 'yes',    type: 'auto' },
+  { key: 'Kraj',         re: /\bkraj\b/i,              machine: 'yes',    type: 'auto' },
+  { key: 'Fresh',        re: /\bfresh\b/i,             machine: 'yes',    type: 'auto' },
+  { key: 'Metro',        re: /\bmetro\b/i,             machine: 'yes',    type: 'big' },
+  { key: 'CBA',          re: /\bcba\b/i,               machine: 'manual', type: 'manual' },
+  { key: 'Milk-Agro',    re: /milk[\s-]?agro/i,        machine: 'manual', type: 'manual' },
+  { key: 'Môj obchod',   re: /môj obchod|moj obchod/i, machine: 'manual', type: 'manual' },
+  { key: 'DELIA',        re: /\bdelia\b/i,             machine: 'manual', type: 'manual' },
+  { key: 'Viva',         re: /\bviva\b/i,              machine: 'manual', type: 'manual' },
+  { key: 'Malina',       re: /\bmalina\b/i,            machine: 'no',     type: 'manual' },
+  { key: 'Žabka',        re: /žabka|zabka/i,           machine: 'no',     type: 'manual' },
+  { key: 'Slovnaft',     re: /slovnaft/i,              machine: 'no',     type: 'manual' },
+  { key: 'OMV',          re: /\bomv\b/i,               machine: 'no',     type: 'manual' },
+  { key: 'Shell',        re: /\bshell\b/i,             machine: 'no',     type: 'manual' },
 ];
 
 function tiles() {
@@ -44,15 +52,8 @@ function tiles() {
 }
 
 const q = ([s, w, n, e]) => `
-[out:json][timeout:120];
-(
-  nwr["shop"="supermarket"](${s},${w},${n},${e});
-  nwr["shop"="department_store"](${s},${w},${n},${e});
-  nwr["shop"="wholesale"](${s},${w},${n},${e});
-  nwr["shop"="convenience"]["brand"](${s},${w},${n},${e});
-  nwr["amenity"="vending_machine"]["vending"="bottle_return"](${s},${w},${n},${e});
-  nwr["amenity"="recycling"]["recycling_type"="reverse_vending_machine"](${s},${w},${n},${e});
-);
+[out:json][timeout:90];
+nwr["shop"~"^(supermarket|department_store|convenience|grocery|wholesale)$"](${s},${w},${n},${e});
 out center tags;`;
 
 const ENDPOINTS = [
@@ -115,7 +116,7 @@ if (process.argv.includes('--cache') && existsSync(CACHE)) {
 }
 
 const rows = [];
-let noName = 0, noChain = 0;
+let noName = 0;
 
 for (const e of elements) {
   const lat = e.lat ?? e.center?.lat;
@@ -128,7 +129,8 @@ for (const e of elements) {
   if (!name) { noName++; continue; }
 
   const chain = CHAINS.find((c) => c.re.test(`${tg.brand ?? ''} ${tg.operator ?? ''} ${name}`));
-  if (!chain && !explicitRvm) { noChain++; continue; }
+  const presence = explicitRvm ? 'yes' : chain ? chain.machine
+    : (tg.shop === 'supermarket' || tg.shop === 'department_store') ? 'yes' : 'no';
 
   const street = tg['addr:street'] || null;
   const hn = tg['addr:housenumber'] ? ` ${tg['addr:housenumber']}` : '';
@@ -141,14 +143,17 @@ for (const e of elements) {
     city: tg['addr:city'] || tg['addr:place'] || '',
     lat, lng,
     opening_hours: tg.opening_hours || '',
-    type: chain?.type ?? 'auto',
+    type: chain?.type ?? (presence === 'yes' ? 'auto' : 'manual'),
     deposit_source: explicitRvm ? 'osm_tag' : 'law_300m2',
+    machine_presence: presence,
   });
 }
 
 console.log(`\nNa import: ${rows.length}`);
 console.log(`  vynechane bez nazvu: ${noName}`);
-console.log(`  vynechane bez siete: ${noChain}`);
+console.log(`  so zalohomatom:      ${rows.filter((r) => r.machine_presence === 'yes').length}`);
+console.log(`  rucny odber:         ${rows.filter((r) => r.machine_presence === 'manual').length}`);
+console.log(`  bez zalohomatu:      ${rows.filter((r) => r.machine_presence === 'no').length}`);
 const byChain = {};
 rows.forEach((r) => { byChain[r.chain ?? 'iné'] = (byChain[r.chain ?? 'iné'] ?? 0) + 1; });
 console.log('Podla siete:', byChain);
